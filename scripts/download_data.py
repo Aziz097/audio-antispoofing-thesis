@@ -83,7 +83,7 @@ def download_asvspoof(target_dir: Path | None = None) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
 
     # Download dataset
-    dataset_slug = "awsaf49/asvpoof-2019-dataset"
+    dataset_slug = "azkurniwan/logical-access-asvspoof-2019"
     print(f"\nDownloading: {dataset_slug}")
     print(f"Target:      {target_dir}")
     print("This may take a while (~6 GB)...\n")
@@ -97,7 +97,7 @@ def download_asvspoof(target_dir: Path | None = None) -> None:
         print(f"\n✅ ASVspoof 2019 LA downloaded to: {target_dir}")
     except Exception as e:
         print(f"\n❌ Download failed: {e}")
-        print("  Try manually: kaggle datasets download -d awsaf49/asvpoof-2019-dataset")
+        print(f"  Try manually: kaggle datasets download -d {dataset_slug}")
         sys.exit(1)
 
     # Verify expected structure
