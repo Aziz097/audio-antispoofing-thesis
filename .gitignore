@@ -1,0 +1,65 @@
+# ============================================================
+# Audio Anti-Spoofing Thesis — .gitignore
+# ============================================================
+
+# ── Data (large, downloaded) ──────────────────────────────
+data/
+*.flac
+*.wav
+*.mp3
+
+# ── Experiment outputs ────────────────────────────────────
+experiments/*/checkpoints/
+experiments/*/results.csv
+
+# ── Model weights ─────────────────────────────────────────
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# ── Python cache ──────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ─────────────────────────────────
+.venv/
+venv/
+env/
+.python-version
+
+# ── Weights & Biases ─────────────────────────────────────
+wandb/
+runs/
+
+# ── TensorBoard ──────────────────────────────────────────
+runs/
+events.out.tfevents.*
+
+# ── Credentials (CRITICAL: never commit) ─────────────────
+.env
+.env.*
+kaggle.json
+*.key
+
+# ── IDE ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Jupyter ───────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── uv lock (optional — commit if you want reproducibility)
+# uv.lock

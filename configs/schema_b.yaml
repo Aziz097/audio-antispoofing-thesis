@@ -1,0 +1,105 @@
+# ============================================================
+# Schema B — WITH RawBoost Augmentation (Primary Schema)
+# Audio Anti-Spoofing Comparative Study
+# ============================================================
+
+# ── Experiment Identity ───────────────────────────────────
+experiment:
+  name: "schema_b"
+  description: "Training with RawBoost augmentation (Algorithm 4)"
+  seed: 42
+
+# ── Data ──────────────────────────────────────────────────
+data:
+  root: "data/ASVspoof2019_LA"
+  sample_rate: 16000
+  duration_sec: 4              # Fixed input length
+  target_samples: 64000        # 4s × 16000 Hz
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+
+# ── Augmentation ──────────────────────────────────────────
+augmentation:
+  enabled: true
+  rawboost:
+    algo: 4                    # Series: LnL → ISD → SSI
+    # LnL (algo 1) params
+    nBands: 5
+    minF: 20
+    maxF: 8000
+    minBW: 100
+    maxBW: 1000
+    minCoeff: 10
+    maxCoeff: 100
+    minG: 0
+    maxG: 0
+    minBiasLinNonLin: 5
+    maxBiasLinNonLin: 20
+    N_f: 5
+    # ISD (algo 2) params
+    P: 10
+    g_sd: 2
+    # SSI (algo 3) params
+    SNRmin: 10
+    SNRmax: 40
+
+# ── K-Fold Cross Validation ──────────────────────────────
+kfold:
+  n_splits: 5
+  seed: 42                     # Must match experiment.seed
+
+# ── Training ──────────────────────────────────────────────
+train:
+  max_epochs: 100
+  batch_size: 24
+  grad_accumulation_steps: 2   # Effective batch size = 48
+  optimizer:
+    name: "adam"
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+  loss:
+    name: "weighted_cross_entropy"
+    weight_bonafide: 0.5       # Adjust if class-imbalanced
+    weight_spoof: 0.5
+  clip_grad_norm: 1.0
+
+# ── Early Stopping ────────────────────────────────────────
+early_stopping:
+  patience: 10
+  min_delta: 0.001
+  monitor: "val/eer"           # Lower is better
+  mode: "min"
+
+# ── Checkpointing ────────────────────────────────────────
+checkpoint:
+  top_k: 5                    # Save top-5 by val EER
+  save_dir: "experiments"
+  average_top_k: true          # Average top-5 for final eval
+
+# ── VRAM Management (RTX 5070, 12GB) ─────────────────────
+vram:
+  amp_enabled: true
+  amp_dtype: "bfloat16"        # bf16 for Blackwell arch
+  grad_scaler: true
+  gradient_checkpointing: false
+  empty_cache_every_n_steps: 50
+  set_to_none: true            # optimizer.zero_grad(set_to_none=True)
+
+# ── Weights & Biases ─────────────────────────────────────
+wandb:
+  project: "audio-antispoofing-thesis"
+  mode: "online"               # "online" | "offline"
+  tags: ["schema_b", "rawboost", "kfold"]
+  log_model: false
+
+# ── Evaluation ────────────────────────────────────────────
+eval:
+  asvspoof_eval_protocol: "data/ASVspoof2019_LA/ASVspoof2019_LA_cm_protocols/ASVspoof2019.LA.cm.eval.trl.txt"
+  asvspoof_eval_flac_dir: "data/ASVspoof2019_LA/ASVspoof2019_LA_eval/flac"
+  asv_score_file: "data/ASVspoof2019_LA/ASVspoof2019_LA_asv_scores/ASVspoof2019.LA.asv.eval.gi.trl.scores.txt"
+  in_the_wild_cache: "data/in_the_wild"
+  inference_benchmark:
+    n_samples: 100
+    warmup_samples: 10

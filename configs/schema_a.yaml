@@ -1,0 +1,102 @@
+# ============================================================
+# Schema A — WITHOUT Augmentation (Ablation of Schema B)
+# Audio Anti-Spoofing Comparative Study
+# ============================================================
+
+# ── Experiment Identity ───────────────────────────────────
+experiment:
+  name: "schema_a"
+  description: "Training WITHOUT augmentation (ablation study)"
+  seed: 42
+
+# ── Data ──────────────────────────────────────────────────
+data:
+  root: "data/ASVspoof2019_LA"
+  sample_rate: 16000
+  duration_sec: 4              # Fixed input length
+  target_samples: 64000        # 4s × 16000 Hz
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+
+# ── Augmentation ──────────────────────────────────────────
+augmentation:
+  enabled: false               # ← KEY DIFFERENCE from Schema B
+  rawboost:
+    algo: 4
+    nBands: 5
+    minF: 20
+    maxF: 8000
+    minBW: 100
+    maxBW: 1000
+    minCoeff: 10
+    maxCoeff: 100
+    minG: 0
+    maxG: 0
+    minBiasLinNonLin: 5
+    maxBiasLinNonLin: 20
+    N_f: 5
+    P: 10
+    g_sd: 2
+    SNRmin: 10
+    SNRmax: 40
+
+# ── K-Fold Cross Validation ──────────────────────────────
+kfold:
+  n_splits: 5
+  seed: 42
+
+# ── Training ──────────────────────────────────────────────
+train:
+  max_epochs: 100
+  batch_size: 24
+  grad_accumulation_steps: 2   # Effective batch size = 48
+  optimizer:
+    name: "adam"
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+  loss:
+    name: "weighted_cross_entropy"
+    weight_bonafide: 0.5
+    weight_spoof: 0.5
+  clip_grad_norm: 1.0
+
+# ── Early Stopping ────────────────────────────────────────
+early_stopping:
+  patience: 10
+  min_delta: 0.001
+  monitor: "val/eer"
+  mode: "min"
+
+# ── Checkpointing ────────────────────────────────────────
+checkpoint:
+  top_k: 5
+  save_dir: "experiments"
+  average_top_k: true
+
+# ── VRAM Management (RTX 5070, 12GB) ─────────────────────
+vram:
+  amp_enabled: true
+  amp_dtype: "bfloat16"
+  grad_scaler: true
+  gradient_checkpointing: false
+  empty_cache_every_n_steps: 50
+  set_to_none: true
+
+# ── Weights & Biases ─────────────────────────────────────
+wandb:
+  project: "audio-antispoofing-thesis"
+  mode: "online"
+  tags: ["schema_a", "no_augmentation", "kfold", "ablation"]
+  log_model: false
+
+# ── Evaluation ────────────────────────────────────────────
+eval:
+  asvspoof_eval_protocol: "data/ASVspoof2019_LA/ASVspoof2019_LA_cm_protocols/ASVspoof2019.LA.cm.eval.trl.txt"
+  asvspoof_eval_flac_dir: "data/ASVspoof2019_LA/ASVspoof2019_LA_eval/flac"
+  asv_score_file: "data/ASVspoof2019_LA/ASVspoof2019_LA_asv_scores/ASVspoof2019.LA.asv.eval.gi.trl.scores.txt"
+  in_the_wild_cache: "data/in_the_wild"
+  inference_benchmark:
+    n_samples: 100
+    warmup_samples: 10
