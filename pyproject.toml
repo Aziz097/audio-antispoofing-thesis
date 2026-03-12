@@ -24,8 +24,9 @@ dependencies = [
     "kaggle>=1.6.0",
     "datasets>=2.18.0",
     "torchinfo>=1.8.0",
-    "torch==2.6.0",
-    "torchaudio==2.6.0",
+    # PyTorch nightly untuk support RTX 5070 (sm_120)
+    "torch",
+    "torchaudio",
 ]
 
 [project.optional-dependencies]
@@ -40,15 +41,18 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# PyTorch CUDA 12.4 index (backward compatible dengan driver CUDA 13.1)
+[tool.hatch.build.targets.wheel]
+packages = ["src", "scripts"]
+
+# PyTorch nightly untuk RTX 5070 (Blackwell sm_120)
 [[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
+name = "pytorch-nightly"
+url = "https://download.pytorch.org/whl/nightly/cu124"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu124" }
-torchaudio = { index = "pytorch-cu124" }
+torch = { index = "pytorch-nightly" }
+torchaudio = { index = "pytorch-nightly" }
 
 [tool.ruff]
 line-length = 100
