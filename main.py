@@ -103,6 +103,12 @@ Examples:
         action="store_true",
         help="Disable wandb logging.",
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint .pth file to resume training from.",
+    )
 
     return parser.parse_args()
 
@@ -128,7 +134,7 @@ def mode_train(args: argparse.Namespace) -> None:
 
     if torch.cuda.is_available():
         logger.info("GPU: %s", torch.cuda.get_device_name(args.gpu))
-        logger.info("VRAM: %.2f GB", torch.cuda.get_device_properties(args.gpu).total_mem / 1024**3)
+        logger.info("VRAM: %.2f GB", torch.cuda.get_device_properties(args.gpu).total_memory / 1024**3)
 
     # ── wandb ────────────────────────────────────────────────
     wandb_run = None
@@ -161,6 +167,7 @@ def mode_train(args: argparse.Namespace) -> None:
         config=config,
         device=device,
         wandb_run=wandb_run,
+        resume=args.resume,
     )
 
     logger.info(

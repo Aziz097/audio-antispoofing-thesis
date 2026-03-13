@@ -13,6 +13,8 @@ Key features:
 import logging
 import time
 from pathlib import Path
+
+from tqdm.auto import tqdm
 from typing import Any
 
 import numpy as np
@@ -153,6 +155,9 @@ def train_one_epoch(
     clip_grad_norm: float = 1.0,
     set_to_none: bool = True,
     epoch: int = 0,
+    fold_idx: int = 0,
+    max_epochs: int = 100,
+    last_eer: float | None = None,
 ) -> dict[str, float]:
     """Train model for one epoch with AMP and gradient accumulation.
 
@@ -168,6 +173,9 @@ def train_one_epoch(
         clip_grad_norm: Max gradient norm for clipping.
         set_to_none: Use set_to_none in zero_grad.
         epoch: Current epoch (for logging).
+        fold_idx: Current fold index (for progress bar).
+        max_epochs: Total epochs (for progress bar).
+        last_eer: Latest validation EER (for progress bar display).
 
     Returns:
         Dictionary with training metrics:
@@ -182,7 +190,17 @@ def train_one_epoch(
 
     optimizer.zero_grad(set_to_none=set_to_none)
 
-    for batch_idx, (waveforms, labels, _filenames) in enumerate(train_loader):
+    # Build tqdm description
+    eer_str = f"{last_eer:.2f}%" if last_eer is not None else "N/A"
+    pbar = tqdm(
+        enumerate(train_loader),
+        total=len(train_loader),
+        desc=f"Fold {fold_idx} | Epoch {epoch+1}/{max_epochs}",
+        unit="batch",
+        leave=False,
+    )
+
+    for batch_idx, (waveforms, labels, _filenames) in pbar:
         waveforms = waveforms.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
@@ -196,11 +214,20 @@ def train_one_epoch(
         scaler.scale(loss).backward()
 
         # Accumulate metrics (use unscaled loss)
-        total_loss += loss.item() * grad_accum_steps
+        batch_loss = loss.item() * grad_accum_steps
+        total_loss += batch_loss
         preds = logits.argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += labels.size(0)
         step_count += 1
+
+        # Update progress bar every batch
+        running_loss = total_loss / step_count
+        pbar.set_postfix(
+            loss=f"{running_loss:.4f}",
+            EER=eer_str,
+            ordered=True,
+        )
 
         # Optimizer step every grad_accum_steps
         if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_loader):
@@ -211,6 +238,8 @@ def train_one_epoch(
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=set_to_none)
+
+    pbar.close()
 
     elapsed = time.time() - epoch_start
     avg_loss = total_loss / max(step_count, 1)
@@ -312,6 +341,7 @@ def run_fold(
     config: dict[str, Any],
     device: torch.device,
     wandb_run: Any | None = None,
+    resume: str | None = None,
 ) -> dict[str, Any]:
     """Train and validate a model for a single fold.
 
@@ -361,6 +391,15 @@ def run_fold(
     logger.info(
         "Model '%s' created: %s trainable params", model_name, f"{n_params:,}",
     )
+
+    if resume is not None:
+        resume_path = Path(resume)
+        if resume_path.exists():
+            checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
+            model.load_state_dict(checkpoint)
+            logger.info("Resumed from checkpoint: %s", resume_path)
+        else:
+            logger.warning("Checkpoint not found at %s. Starting from scratch.", resume_path)
 
     # ── Loss Function ────────────────────────────────────────
     # Compute inverse-frequency weights dynamically from the training fold so
@@ -434,6 +473,7 @@ def run_fold(
     all_metrics: list[dict[str, float]] = []
 
     # ── Epoch Loop ───────────────────────────────────────────
+    last_eer: float | None = None         # Track for tqdm display
     for epoch in range(max_epochs):
         # Train
         train_metrics = train_one_epoch(
@@ -448,6 +488,9 @@ def run_fold(
             clip_grad_norm=clip_grad_norm,
             set_to_none=set_to_none,
             epoch=epoch,
+            fold_idx=fold_idx,
+            max_epochs=max_epochs,
+            last_eer=last_eer,
         )
 
         # Validate
@@ -458,6 +501,7 @@ def run_fold(
             device=device,
             amp_dtype=amp_dtype,
         )
+        last_eer = val_metrics["val/eer"]
 
         # Merge metrics
         epoch_metrics = {
@@ -534,6 +578,7 @@ def run_kfold_experiment(
     config: dict[str, Any],
     device: torch.device,
     wandb_run: Any | None = None,
+    resume: str | None = None,
 ) -> dict[str, Any]:
     """Run full K-Fold cross-validation experiment for one model.
 
@@ -604,6 +649,7 @@ def run_kfold_experiment(
             config=config,
             device=device,
             wandb_run=wandb_run,
+            resume=resume,
         )
         fold_results.append(result)
 

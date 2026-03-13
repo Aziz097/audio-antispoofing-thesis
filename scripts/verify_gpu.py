@@ -48,7 +48,7 @@ def run_verification(gpu_idx: int = 0) -> None:
     print(f"  cuDNN version:   {torch.backends.cudnn.version()}")
     print(f"  Device [{gpu_idx}]:    {props.name}")
     print(f"  Compute cap:     {props.major}.{props.minor}")
-    print(f"  Total VRAM:      {props.total_mem / 1024**3:.2f} GB")
+    print(f"  Total VRAM:      {props.total_memory / 1024**3:.2f} GB")
     print(f"  Multi-processor: {props.multi_processor_count}")
 
     # ── 2. bf16 / AMP Support ────────────────────────────────
@@ -149,7 +149,7 @@ def run_verification(gpu_idx: int = 0) -> None:
     print("\n[4/4] Summary")
     print("-" * 40)
 
-    total_vram_gb = props.total_mem / 1024**3
+    total_vram_gb = props.total_memory / 1024**3
     print(f"\n  {'Model':<20} {'Status':<6} {'Params':>12} {'Latency':>10} {'VRAM':>10}")
     print(f"  {'─'*20} {'─'*6} {'─'*12} {'─'*10} {'─'*10}")
 

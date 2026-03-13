@@ -67,7 +67,7 @@ def vram_status(label: str = "") -> dict[str, float]:
 
     allocated = torch.cuda.memory_allocated() / (1024 ** 3)
     reserved = torch.cuda.memory_reserved() / (1024 ** 3)
-    total = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+    total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
 
     if label:
         logger.info(

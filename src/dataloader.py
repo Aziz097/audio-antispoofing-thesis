@@ -186,130 +186,169 @@ class ASVspoof2019Dataset(Dataset):
 # ============================================================
 
 class InTheWildDataset(Dataset):
-    """In-the-Wild evaluation dataset from HuggingFace.
+    """In-the-Wild evaluation dataset loaded from local files.
 
-    Source: mueller91/In-The-Wild
-    Used for cross-domain evaluation only (no augmentation).
+    Reads audio files and labels directly from the locally downloaded dataset.
+    Expected structure:
+        data_dir/release_in_the_wild/
+            meta.csv      ← columns: file, speaker, label
+            *.wav         ← audio files
+
+    Used for cross-domain evaluation only (no augmentation, deterministic).
+
+    Label convention (same as ASVspoof, no inversion):
+        "bonafide" → 1
+        "spoof"    → 0
 
     Args:
-        cache_dir: Path to local cache directory.
+        data_dir: Root directory of the In-the-Wild dataset.
         target_len: Target waveform length in samples.
     """
 
     def __init__(
         self,
-        cache_dir: str | Path = "data/in_the_wild",
+        data_dir: str | Path = "data/in_the_wild",
         target_len: int = TARGET_SAMPLES,
     ) -> None:
-        self.cache_dir = Path(cache_dir)
+        import pandas as pd
+
+        self.data_dir = Path(data_dir)
+        self.audio_dir = self.data_dir / "release_in_the_wild"
         self.target_len = target_len
 
-        # Load from HuggingFace with local caching
-        from datasets import load_dataset
-
-        logger.info("Loading In-the-Wild dataset from HuggingFace...")
-        self.dataset = load_dataset(
-            "mueller91/In-The-Wild",
-            cache_dir=str(self.cache_dir),
-            trust_remote_code=True,
-        )
-
-        # Use the test split preferentially for evaluation
-        available_splits = list(self.dataset.keys())
-        logger.info("Available splits: %s", available_splits)
-        preferred_split = "test" if "test" in available_splits else available_splits[0]
-        if preferred_split != "test":
-            logger.warning(
-                "[InTheWild] 'test' split not found. "
-                "Using '%s'. Available: %s", preferred_split, available_splits,
+        # Validate directory
+        if not self.audio_dir.exists():
+            raise FileNotFoundError(
+                f"In-the-Wild audio directory not found: {self.audio_dir}\n"
+                "Expected structure: data_dir/release_in_the_wild/*.wav + meta.csv"
             )
-        self.data = self.dataset[preferred_split]
 
-        # Identify column names
-        self.audio_col = self._find_column(["audio", "file", "path"])
-        self.label_col = self._find_column(["label", "is_fake", "fake"])
+        # Read meta.csv
+        meta_path = self.audio_dir / "meta.csv"
+        if not meta_path.exists():
+            raise FileNotFoundError(f"meta.csv not found at: {meta_path}")
 
-        # Validate label convention — mueller91/In-The-Wild: 0=real, 1=fake
-        sample_labels = set(list(self.data[self.label_col])[:100])
-        assert sample_labels <= {0, 1}, f"Unexpected label values: {sample_labels}"
+        df = pd.read_csv(meta_path)
+
+        # Validate required columns
+        required_cols = {"file", "label"}
+        missing = required_cols - set(df.columns)
+        if missing:
+            raise ValueError(
+                f"meta.csv is missing required columns: {missing}. "
+                f"Found: {list(df.columns)}"
+            )
+
+        # Map label strings to ints: bonafide=1, spoof=0
+        # Normalize label: strip whitespace, lowercase, remove hyphens
+        # so "bona-fide" and "bonafide" both map to 1
+        _itw_label_map = {**LABEL_MAP, "bona-fide": 1}
+        df["label_int"] = (
+            df["label"].str.strip().str.lower().map(_itw_label_map)
+        )
+        unknown_mask = df["label_int"].isna()
+        if unknown_mask.any():
+            unknown_vals = df.loc[unknown_mask, "label"].unique().tolist()
+            logger.warning(
+                "[InTheWild] Unknown labels found and dropped: %s", unknown_vals
+            )
+            df = df[~unknown_mask].reset_index(drop=True)
+
+        df["label_int"] = df["label_int"].astype(int)
+
+        # Build a filename→Path lookup in one O(n) directory scan
+        # (avoids ~31K individual Path.exists() syscalls)
+        existing_files: dict[str, Path] = {
+            p.name: p for p in self.audio_dir.iterdir() if p.is_file()
+        }
+
+        def _resolve_path(fname: str) -> Path:
+            base = Path(fname).name
+            if base in existing_files:
+                return existing_files[base]
+            # Try adding .wav if the meta.csv entry has no extension
+            wav_base = base + ".wav"
+            if wav_base in existing_files:
+                return existing_files[wav_base]
+            # Fallback: will raise a clear FileNotFoundError in __getitem__
+            return self.audio_dir / base
+
+        df["audio_path"] = df["file"].astype(str).map(_resolve_path)
+
+        self.df = df
+        self.samples = df[["audio_path", "label_int", "file"]].to_dict("records")
+
+        # Logging: total count and label distribution
+        n_bonafide = int((df["label_int"] == 1).sum())
+        n_spoof = int((df["label_int"] == 0).sum())
+        total = len(df)
+        print(
+            f"[InTheWild] Loaded {total} samples — "
+            f"bonafide={n_bonafide}, spoof={n_spoof} | "
+            f"audio_dir={self.audio_dir}"
+        )
         logger.info(
-            "[InTheWild] Label convention: raw 0→1 (bonafide), raw 1→0 (spoof). "
-            "Sample labels: %s", sample_labels,
+            "[InTheWild] %d samples (bonafide=%d, spoof=%d) from %s",
+            total, n_bonafide, n_spoof, self.audio_dir,
         )
-
-        # Print label distribution
-        self._log_label_distribution()
-
-    def _find_column(self, candidates: list[str]) -> str:
-        """Find the first matching column name from candidates."""
-        cols = self.data.column_names
-        for c in candidates:
-            if c in cols:
-                return c
-        raise ValueError(
-            f"Could not find column from {candidates} in {cols}"
-        )
-
-    def _log_label_distribution(self) -> None:
-        """Log the distribution of labels in the dataset."""
-        labels = self.data[self.label_col]
-        unique, counts = np.unique(labels, return_counts=True)
-        dist = dict(zip(unique.tolist(), counts.tolist()))
-        total = sum(counts)
-        print(f"In-the-Wild label distribution: {dist} (total={total})")
-        logger.info("In-the-Wild label distribution: %s (total=%d)", dist, total)
 
     def crop_or_pad(self, waveform: np.ndarray) -> np.ndarray:
-        """Deterministic crop or pad for evaluation."""
+        """Deterministic crop or pad for evaluation (always from start).
+
+        Args:
+            waveform: 1-D numpy array.
+
+        Returns:
+            Waveform of shape (target_len,).
+        """
         x_len = waveform.shape[0]
         if x_len >= self.target_len:
+            # Always take from the beginning — deterministic for eval
             return waveform[: self.target_len]
         else:
+            # Tile-pad to fill target length
             num_repeats = (self.target_len // x_len) + 1
             return np.tile(waveform, num_repeats)[: self.target_len]
 
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.samples)
 
     def __getitem__(self, index: int) -> tuple[Tensor, int, str]:
         """Load and return a single sample.
 
         Returns:
-            Tuple of (waveform_tensor[target_len], label_int, filename_str).
+            Tuple of (waveform_tensor[target_len], label_int, filename_stem).
         """
-        item = self.data[index]
+        record = self.samples[index]
+        audio_path: Path = record["audio_path"]
+        label: int = record["label_int"]
+        # Return the stem (filename without extension) as identifier
+        fname_stem: str = Path(str(record["file"])).stem
 
-        # Extract audio array
-        audio_data = item[self.audio_col]
-        if isinstance(audio_data, dict):
-            # HuggingFace Audio feature: {"array": np.array, "sampling_rate": int}
-            waveform = np.array(audio_data["array"], dtype=np.float64)
-            sr = audio_data.get("sampling_rate", SAMPLE_RATE)
-        else:
-            waveform = np.array(audio_data, dtype=np.float64)
-            sr = SAMPLE_RATE
+        # Load audio via soundfile
+        waveform, sr = sf.read(str(audio_path), dtype="float32")
 
-        # Resample if needed
+        # Handle stereo → mono by averaging channels
+        if waveform.ndim == 2:
+            waveform = waveform.mean(axis=1)
+
+        # Ensure 1-D float array
+        waveform = waveform.astype(np.float32)
+
+        # Resample only if needed
         if sr != SAMPLE_RATE:
             import librosa
-            waveform = librosa.resample(waveform, orig_sr=sr, target_sr=SAMPLE_RATE)
+            waveform = librosa.resample(
+                waveform.astype(np.float64),
+                orig_sr=sr,
+                target_sr=SAMPLE_RATE,
+            ).astype(np.float32)
 
-        # Crop or pad
+        # Deterministic crop / tile-pad to target length
         waveform = self.crop_or_pad(waveform)
 
-        # Label: map to bonafide=1, spoof=0
-        raw_label = item[self.label_col]
-        if isinstance(raw_label, str):
-            label = LABEL_MAP.get(raw_label.lower(), 0)
-        else:
-            # Numeric label: assume 1=bonafide, 0=spoof (or vice versa)
-            # In-the-Wild: label=1 means fake/spoof → invert
-            label = 1 - int(raw_label) if int(raw_label) in (0, 1) else int(raw_label)
-
-        filename = f"itw_{index}"
-
-        x = Tensor(waveform.astype(np.float32))
-        return x, label, filename
+        x = torch.from_numpy(waveform)
+        return x, label, fname_stem
 
 
 # ============================================================
@@ -506,10 +545,39 @@ class _MultiDirASVspoofDataset(Dataset):
         self.is_eval = is_eval
         self.rawboost_algo = rawboost_algo
 
+        self.rawboost = None
+        self._audio_cache: dict[int, np.ndarray] = {}
+
         if augment:
             self.rawboost = RawBoost(params=rawboost_params or None, sr=SAMPLE_RATE)
-        else:
-            self.rawboost = None
+        
+        # Pre-load all pure (unaugmented) audio to RAM to save Disk I/O overhead
+        self._preload_audio()
+
+    def _preload_audio(self) -> None:
+        """Pre-load ALL raw waveforms to RAM to avoid repeated disk reads.
+        
+        Augmentation (RawBoost) is NOT applied here to preserve randomness
+        in every epoch.
+        """
+        from tqdm.auto import tqdm
+
+        n = len(self.samples)
+        logger.info(
+            "[PreLoad] Loading %d raw audio files into RAM to avoid disk I/O bottleneck …", 
+            n
+        )
+
+        for idx in tqdm(range(n), desc="Pre-loading raw audio to RAM", unit="samp"):
+            sample = self.samples[idx]
+            flac_path = self._resolve_flac_path(sample)
+            waveform, _sr = sf.read(str(flac_path))
+            self._audio_cache[idx] = waveform.astype(np.float32)
+
+        # Estimate memory footprint
+        mem_mb = sum(w.nbytes for w in self._audio_cache.values()) / (1024 ** 2)
+        logger.info("[PreLoad] Done — %d raw audio cached (%.0f MB RAM used)", n, mem_mb)
+        print(f"[PreLoad] {n} raw waveforms pre-loaded in RAM (≈{mem_mb:.0f} MB RAM)")
 
     def _resolve_flac_path(self, sample: dict[str, Any]) -> Path:
         """Get the .flac file path for a sample."""
@@ -539,17 +607,23 @@ class _MultiDirASVspoofDataset(Dataset):
         filename = sample["filename"]
         label = sample["label"]
 
-        flac_path = self._resolve_flac_path(sample)
-        waveform, sr = sf.read(str(flac_path))
+        # 1. Fetch RAW audio (from RAM cache if available, else disk)
+        if index in self._audio_cache:
+            waveform = self._audio_cache[index]
+        else:
+            flac_path = self._resolve_flac_path(sample)
+            waveform, _sr = sf.read(str(flac_path))
 
-        # Crop or pad
+        # 2. Crop or pad
         waveform = self.crop_or_pad(waveform)
 
-        # Augmentation (training only)
-        if self.augment and self.rawboost is not None:
+        # 3. ON-THE-FLY Augmentation (only bonafide in training splits)
+        # Fixes catastrophic overfitting issue by ensuring diverse 
+        # augmentations every epoch.
+        if self.augment and self.rawboost is not None and label == 1:
             waveform = self.rawboost(waveform, algo=self.rawboost_algo)
 
-        x = Tensor(waveform.astype(np.float32))
+        x = torch.from_numpy(waveform.astype(np.float32))
         return x, label, filename
 
 
@@ -561,11 +635,12 @@ def get_dataloader(
     dataset: Dataset,
     batch_size: int,
     shuffle: bool,
-    num_workers: int = 4,
+    num_workers: int = 2,
     pin_memory: bool = True,
     persistent_workers: bool = True,
     drop_last: bool = False,
     seed: int | None = None,
+    prefetch_factor: int | None = 4,
 ) -> DataLoader:
     """Create a PyTorch DataLoader with optimized settings.
 
@@ -578,6 +653,7 @@ def get_dataloader(
         persistent_workers: Keep workers alive between epochs.
         drop_last: Drop last incomplete batch.
         seed: Random seed for reproducible shuffling.
+        prefetch_factor: Batches to prefetch per worker (default 4).
 
     Returns:
         Configured DataLoader instance.
@@ -595,6 +671,7 @@ def get_dataloader(
         random.seed(worker_seed)
 
     use_persistent = persistent_workers and num_workers > 0
+    pf = prefetch_factor if num_workers > 0 else None
 
     return DataLoader(
         dataset,
@@ -606,6 +683,7 @@ def get_dataloader(
         drop_last=drop_last,
         worker_init_fn=seed_worker,
         generator=generator,
+        prefetch_factor=pf,
     )
 
 

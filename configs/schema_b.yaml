@@ -15,7 +15,7 @@ data:
   sample_rate: 16000
   duration_sec: 4              # Fixed input length
   target_samples: 64000        # 4s × 16000 Hz
-  num_workers: 4
+  num_workers: 2
   pin_memory: true
   persistent_workers: true
 
