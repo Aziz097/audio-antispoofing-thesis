@@ -372,7 +372,7 @@ def run_fold(
     data_cfg = config.get("data", {})
 
     # ── DataLoaders ──────────────────────────────────────────
-    _n_workers = max(1, (os.cpu_count() or 4) - 2)
+    _n_workers = data_cfg.get("num_workers", 2)
     logger.info("DataLoader num_workers=%d", _n_workers)
 
     train_loader = get_dataloader(
