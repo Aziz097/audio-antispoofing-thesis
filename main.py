@@ -155,6 +155,10 @@ def mode_train(args: argparse.Namespace) -> None:
                 tags=wandb_cfg.get("tags", []),
                 mode=wandb_cfg.get("mode", "online"),
             )
+            wandb_run.define_metric("epoch")
+            wandb_run.define_metric("train/*", step_metric="epoch")
+            wandb_run.define_metric("val/*", step_metric="epoch")
+            wandb_run.define_metric("vram/*", step_metric="epoch")
             logger.info("wandb initialized: %s", run_name)
         except Exception as e:
             logger.warning("wandb init failed: %s. Continuing without wandb.", e)

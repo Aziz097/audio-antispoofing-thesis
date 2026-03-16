@@ -42,8 +42,8 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
     os.environ["PYTHONHASHSEED"] = str(seed)
     logger.info("Random seed set to %d", seed)
 
@@ -52,31 +52,37 @@ def set_seed(seed: int) -> None:
 # 3b. VRAM Monitoring
 # ============================================================
 
-def vram_status(label: str = "") -> dict[str, float]:
+def vram_status(label: str = "", reset_peak: bool = False) -> dict[str, float]:
     """Return current GPU VRAM usage in GB for wandb logging.
 
     Args:
         label: Optional label prefix for log messages.
+        reset_peak: Whether to reset peak memory stats.
 
     Returns:
-        Dictionary with keys: allocated_gb, reserved_gb, total_gb.
+        Dictionary with keys: allocated_gb, peak_allocated_gb, reserved_gb, total_gb.
         Returns zeros if CUDA is unavailable.
     """
     if not torch.cuda.is_available():
-        return {"vram/allocated_gb": 0.0, "vram/reserved_gb": 0.0, "vram/total_gb": 0.0}
+        return {"vram/allocated_gb": 0.0, "vram/peak_allocated_gb": 0.0, "vram/reserved_gb": 0.0, "vram/total_gb": 0.0}
 
     allocated = torch.cuda.memory_allocated() / (1024 ** 3)
     reserved = torch.cuda.memory_reserved() / (1024 ** 3)
-    total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+    total = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+
+    if reset_peak:
+        torch.cuda.reset_peak_memory_stats()
+    peak_allocated = torch.cuda.max_memory_allocated() / (1024 ** 3)
 
     if label:
         logger.info(
-            "[%s] VRAM: %.2f GB allocated, %.2f GB reserved, %.2f GB total",
-            label, allocated, reserved, total,
+            "[%s] VRAM: %.2f GB allocated, %.2f GB peak, %.2f GB reserved, %.2f GB total",
+            label, allocated, peak_allocated, reserved, total,
         )
 
     return {
         "vram/allocated_gb": round(allocated, 4),
+        "vram/peak_allocated_gb": round(peak_allocated, 4),
         "vram/reserved_gb": round(reserved, 4),
         "vram/total_gb": round(total, 4),
     }

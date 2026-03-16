@@ -52,8 +52,8 @@ kfold:
 # ── Training ──────────────────────────────────────────────
 train:
   max_epochs: 100
-  batch_size: 24
-  grad_accumulation_steps: 2   # Effective batch size = 48
+  batch_size: 48
+  grad_accumulation_steps: 1   # Effective batch size = 48
   optimizer:
     name: "adam"
     lr: 1.0e-4

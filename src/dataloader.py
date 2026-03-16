@@ -82,6 +82,15 @@ class ASVspoof2019Dataset(Dataset):
             len(self.samples), self.flac_dir, self.augment, self.is_eval,
         )
 
+        self._audio_cache: list[np.ndarray] = []
+        logger.info("Pre-loading %d audio files to RAM...", len(self.samples))
+        for s in self.samples:
+            fpath = self.flac_dir / f"{s['filename']}.flac"
+            wav, _ = sf.read(str(fpath))
+            self._audio_cache.append(wav.astype(np.float64))
+        logger.info("Audio pre-load complete. RAM usage approx %.1f MB",
+                    sum(a.nbytes for a in self._audio_cache) / 1e6)
+
     @staticmethod
     def parse_protocol(protocol_path: str | Path) -> list[dict[str, Any]]:
         """Parse an ASVspoof 2019 protocol file.
@@ -160,13 +169,7 @@ class ASVspoof2019Dataset(Dataset):
         label = sample["label"]
 
         # Load audio
-        flac_path = self.flac_dir / f"{filename}.flac"
-        waveform, sr = sf.read(str(flac_path))
-
-        if sr != SAMPLE_RATE:
-            raise ValueError(
-                f"Expected {SAMPLE_RATE} Hz, got {sr} Hz for {flac_path}"
-            )
+        waveform = self._audio_cache[index].copy()
 
         # Crop or pad to target length
         waveform = self.crop_or_pad(waveform)

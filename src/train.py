@@ -17,10 +17,12 @@ from pathlib import Path
 from tqdm.auto import tqdm
 from typing import Any
 
+import os
+
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch.utils.data import DataLoader
 
 from src.dataloader import KFoldManager, get_dataloader
@@ -183,6 +185,7 @@ def train_one_epoch(
     """
     model.train()
     total_loss = 0.0
+    total_grad_norm = 0.0
     correct = 0
     total = 0
     step_count = 0
@@ -233,7 +236,10 @@ def train_one_epoch(
         if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_loader):
             # Unscale for gradient clipping
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), clip_grad_norm
+            ).item()
+            total_grad_norm += grad_norm
 
             scaler.step(optimizer)
             scaler.update()
@@ -248,6 +254,7 @@ def train_one_epoch(
 
     return {
         "train/loss": avg_loss,
+        "train/grad_norm": total_grad_norm / max(step_count // grad_accum_steps, 1),
         "train/accuracy": accuracy,
         "train/steps_per_sec": steps_per_sec,
         "train/epoch_time_sec": elapsed,
@@ -365,11 +372,14 @@ def run_fold(
     data_cfg = config.get("data", {})
 
     # ── DataLoaders ──────────────────────────────────────────
+    _n_workers = max(1, (os.cpu_count() or 4) - 2)
+    logger.info("DataLoader num_workers=%d", _n_workers)
+
     train_loader = get_dataloader(
         train_dataset,
         batch_size=train_cfg.get("batch_size", 24),
         shuffle=True,
-        num_workers=data_cfg.get("num_workers", 4),
+        num_workers=_n_workers,
         pin_memory=data_cfg.get("pin_memory", True),
         persistent_workers=data_cfg.get("persistent_workers", True),
         drop_last=True,
@@ -379,7 +389,7 @@ def run_fold(
         val_dataset,
         batch_size=train_cfg.get("batch_size", 24),
         shuffle=False,
-        num_workers=data_cfg.get("num_workers", 4),
+        num_workers=_n_workers,
         pin_memory=data_cfg.get("pin_memory", True),
         persistent_workers=False,
         drop_last=False,
@@ -387,6 +397,9 @@ def run_fold(
 
     # ── Model ────────────────────────────────────────────────
     model = get_model(model_name).to(device)
+    if wandb_run is not None:
+        import wandb
+        wandb.watch(model, log="gradients", log_freq=100)
     n_params = count_parameters(model)
     logger.info(
         "Model '%s' created: %s trainable params", model_name, f"{n_params:,}",
@@ -440,7 +453,7 @@ def run_fold(
     # ── AMP & GradScaler ─────────────────────────────────────
     amp_dtype_str = vram_cfg.get("amp_dtype", "bfloat16")
     amp_dtype = torch.bfloat16 if amp_dtype_str == "bfloat16" else torch.float16
-    scaler = GradScaler(enabled=vram_cfg.get("grad_scaler", True))
+    scaler = GradScaler("cuda", enabled=vram_cfg.get("grad_scaler", True))
 
     # ── Early Stopping ───────────────────────────────────────
     early_stopper = EarlyStopping(
@@ -475,6 +488,8 @@ def run_fold(
     # ── Epoch Loop ───────────────────────────────────────────
     last_eer: float | None = None         # Track for tqdm display
     for epoch in range(max_epochs):
+        torch.cuda.reset_peak_memory_stats()
+        
         # Train
         train_metrics = train_one_epoch(
             model=model,
@@ -507,9 +522,11 @@ def run_fold(
         epoch_metrics = {
             "epoch": epoch,
             "fold": fold_idx,
+            "train/lr": optimizer.param_groups[0]["lr"],
+            "train/scaler_scale": scaler.get_scale(),
             **train_metrics,
             **val_metrics,
-            **vram_status(label=f"fold{fold_idx}_ep{epoch}"),
+            **vram_status(label=f"fold{fold_idx}_ep{epoch}", reset_peak=False),
         }
         all_metrics.append(epoch_metrics)
 
@@ -558,6 +575,14 @@ def run_fold(
         avg_path = save_dir / f"{model_name}_fold{fold_idx}_averaged_top{ckpt_cfg.get('top_k', 5)}.pth"
         torch.save(avg_state, str(avg_path))
         logger.info("Averaged checkpoint saved: %s", avg_path.name)
+
+    if wandb_run is not None:
+        import wandb
+        wandb_run.log({
+            f"fold_summary/fold{fold_idx}_best_eer": early_stopper.best_value,
+            f"fold_summary/fold{fold_idx}_best_epoch": early_stopper.best_epoch,
+            f"fold_summary/fold{fold_idx}_n_epochs": epoch + 1,
+        })
 
     return {
         "fold": fold_idx,
