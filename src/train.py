@@ -397,7 +397,7 @@ def run_fold(
 
     # ── Model ────────────────────────────────────────────────
     model = get_model(model_name).to(device)
-    if wandb_run is not None:
+    if wandb_run is not None and fold_idx == 0:
         import wandb
         wandb.watch(model, log="gradients", log_freq=100)
     n_params = count_parameters(model)
@@ -485,6 +485,16 @@ def run_fold(
 
     all_metrics: list[dict[str, float]] = []
 
+    # ── Smoke-test log ───────────────────────────────────────
+    if wandb_run is not None:
+        wandb_run.log({
+            "fold": fold_idx,
+            "fold/n_train": len(train_dataset),
+            "fold/n_val": len(val_dataset),
+            "fold/batch_size": train_cfg.get("batch_size", 32),
+            "fold/num_workers": _n_workers,
+        })
+
     # ── Epoch Loop ───────────────────────────────────────────
     last_eer: float | None = None         # Track for tqdm display
     for epoch in range(max_epochs):
@@ -519,7 +529,9 @@ def run_fold(
         last_eer = val_metrics["val/eer"]
 
         # Merge metrics
+        global_step = fold_idx * max_epochs + epoch
         epoch_metrics = {
+            "global_step": global_step,
             "epoch": epoch,
             "fold": fold_idx,
             "train/lr": optimizer.param_groups[0]["lr"],
@@ -533,8 +545,6 @@ def run_fold(
         # Log to wandb — use a fold-offset global step so fold N's epoch 0
         # does not overwrite fold (N-1)'s epoch 0 in the wandb timeline.
         if wandb_run is not None:
-            max_epochs = train_cfg.get("max_epochs", 100)
-            global_step = fold_idx * max_epochs + epoch
             wandb_run.log(epoch_metrics, step=global_step)
 
         # Console log

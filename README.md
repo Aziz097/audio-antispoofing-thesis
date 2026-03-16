@@ -159,8 +159,8 @@ find experiments/ -name "*.pt" | xargs ls -lht | head -10
 - CUDA: `12.8`
 
 **Training Config (Update: High-Performance)**
-- Workers: `10` (Formula: 12 cores - 2)
-- Batch Size / Accumulator: `128 x 1 = eff 128`
+- Workers: `4` (Formula: 12 cores - 2)
+- Batch Size / Accumulator: `48 x 2 = eff 96`
 - Optimizer: `Adam lr=1e-4`
 - Max Epochs: `100` (Eary Stop 10)
 - K-fold: `5 split (Seed 42, deterministic=false)`

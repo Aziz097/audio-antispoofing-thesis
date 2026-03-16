@@ -16,7 +16,7 @@ data:
   sample_rate: 16000
   duration_sec: 4              # Fixed input length
   target_samples: 64000        # 4s × 16000 Hz
-  num_workers: 10
+  num_workers: 4
   pin_memory: true
   persistent_workers: true
 
@@ -50,8 +50,8 @@ kfold:
 # ── Training ──────────────────────────────────────────────
 train:
   max_epochs: 100
-  batch_size: 128
-  grad_accumulation_steps: 1   # Effective batch size = 128
+  batch_size: 48
+  grad_accumulation_steps: 2 
   optimizer:
     name: "adam"
     lr: 1.0e-4

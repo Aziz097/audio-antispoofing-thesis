@@ -156,9 +156,10 @@ def mode_train(args: argparse.Namespace) -> None:
                 mode=wandb_cfg.get("mode", "online"),
             )
             wandb_run.define_metric("epoch")
-            wandb_run.define_metric("train/*", step_metric="epoch")
-            wandb_run.define_metric("val/*", step_metric="epoch")
-            wandb_run.define_metric("vram/*", step_metric="epoch")
+            wandb_run.define_metric("global_step")
+            wandb_run.define_metric("train/*")
+            wandb_run.define_metric("val/*")
+            wandb_run.define_metric("vram/*")
             logger.info("wandb initialized: %s", run_name)
         except Exception as e:
             logger.warning("wandb init failed: %s. Continuing without wandb.", e)
@@ -166,21 +167,25 @@ def mode_train(args: argparse.Namespace) -> None:
     # ── Train ────────────────────────────────────────────────
     from src.train import run_kfold_experiment
 
-    results = run_kfold_experiment(
-        model_name=args.model,
-        config=config,
-        device=device,
-        wandb_run=wandb_run,
-        resume=args.resume,
-    )
+    try:
+        results = run_kfold_experiment(
+            model_name=args.model,
+            config=config,
+            device=device,
+            wandb_run=wandb_run,
+            resume=args.resume,
+        )
 
-    logger.info(
-        "Training complete: %s — Mean EER: %.2f%% ± %.2f%%",
-        args.model, results["mean_eer"], results["std_eer"],
-    )
-
-    if wandb_run is not None:
-        wandb_run.finish()
+        logger.info(
+            "Training complete: %s — Mean EER: %.2f%% ± %.2f%%",
+            args.model, results["mean_eer"], results["std_eer"],
+        )
+    except Exception as e:
+        logger.error("Training failed: %s", e)
+        raise
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 def mode_eval(args: argparse.Namespace) -> None:
