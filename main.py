@@ -105,9 +105,8 @@ Examples:
     )
     parser.add_argument(
         "--resume",
-        type=str,
-        default=None,
-        help="Path to checkpoint .pth file to resume training from.",
+        action="store_true",
+        help="Smarter resume: automatically search and load latest.pth for the current fold to prevent cross-fold data leakage.",
     )
 
     return parser.parse_args()
@@ -147,6 +146,8 @@ def mode_train(args: argparse.Namespace) -> None:
             wandb_run = wandb.init(
                 project=wandb_cfg.get("project", "audio-antispoofing-thesis"),
                 name=run_name,
+                id=run_name,          # Bind the run ID to the deterministic name
+                resume="allow",       # Automatically resume appending to the same dashboard
                 config={
                     "model": args.model,
                     "schema": config.get("experiment", {}).get("name"),
@@ -155,11 +156,18 @@ def mode_train(args: argparse.Namespace) -> None:
                 tags=wandb_cfg.get("tags", []),
                 mode=wandb_cfg.get("mode", "online"),
             )
-            wandb_run.define_metric("epoch")
+            # Define global_step as the primary x-axis for all time-series.
+            # Without step_metric, wandb only stores the SUMMARY (last) value
+            # and charts appear with a single data point instead of per-epoch
+            # time-series.  Explicitly binding every metric group to
+            # global_step fixes the "only 1 epoch visible" issue.
             wandb_run.define_metric("global_step")
-            wandb_run.define_metric("train/*")
-            wandb_run.define_metric("val/*")
-            wandb_run.define_metric("vram/*")
+            wandb_run.define_metric("epoch",       step_metric="global_step")
+            wandb_run.define_metric("fold",        step_metric="global_step")
+            wandb_run.define_metric("train/*",     step_metric="global_step")
+            wandb_run.define_metric("val/*",       step_metric="global_step")
+            wandb_run.define_metric("vram/*",      step_metric="global_step")
+            wandb_run.define_metric("fold_summary/*", step_metric="global_step")
             logger.info("wandb initialized: %s", run_name)
         except Exception as e:
             logger.warning("wandb init failed: %s. Continuing without wandb.", e)

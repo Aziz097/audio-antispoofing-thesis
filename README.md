@@ -47,7 +47,7 @@ tmux kill-session -t thesis_training  # Hapus sesi (HANYA setelah training seles
 
 **Keyboard Shortcuts (di dalam tmux)**
 - `Ctrl+B → D` : Detach (aman)
-- `Ctrl+B → [ lalu PgUp` : Scroll ke atas
+- `Ctrl+B → lalu PgUp` : Scroll ke atas
 - `Q` : Keluar scroll
 - `Ctrl+B → C` : Buat window baru
 - `Ctrl+B → N` : Pindah window
@@ -60,7 +60,7 @@ tmux kill-session -t thesis_training  # Hapus sesi (HANYA setelah training seles
 
 ### Schema B — Utama (RawBoost)
 ```bash
-# 1/8 — Sedang jalan sekarang
+# 1/8
 python main.py --mode train --model se_rawformer --config configs/schema_b.yaml
 
 # 2/8

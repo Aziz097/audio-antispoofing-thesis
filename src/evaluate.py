@@ -21,6 +21,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from src.dataloader import ASVspoof2019Dataset, InTheWildDataset, get_dataloader
 from src.models import get_model
@@ -47,6 +48,8 @@ def evaluate_model(
     dataloader: DataLoader,
     device: torch.device,
     amp_dtype: torch.dtype = torch.bfloat16,
+    fold_idx: int = 0,
+    dataset_name: str = "",
 ) -> dict[str, Any]:
     """Evaluate a model and collect per-sample scores.
 
@@ -69,7 +72,14 @@ def evaluate_model(
     all_filenames: list[str] = []
     all_preds: list[int] = []
 
-    for waveforms, labels, filenames in dataloader:
+    pbar = tqdm(
+        dataloader, 
+        desc=f"Eval Fold {fold_idx} ({dataset_name})", 
+        unit="batch", 
+        leave=False,
+    )
+    
+    for waveforms, labels, filenames in pbar:
         waveforms = waveforms.to(device, non_blocking=True)
 
         with torch.autocast(device_type="cuda", dtype=amp_dtype):
@@ -83,6 +93,10 @@ def evaluate_model(
         all_labels.extend(labels.tolist() if isinstance(labels, torch.Tensor) else labels)
         all_filenames.extend(filenames)
         all_preds.extend(preds)
+        
+        pbar.set_postfix({"samples": len(all_scores)})
+
+    pbar.close()
 
     return {
         "scores": np.array(all_scores),
@@ -265,7 +279,7 @@ def evaluate_all_folds(
     elif dataset_name == "in_the_wild":
         cache_dir = eval_cfg.get("in_the_wild_cache", "data/in_the_wild")
         dataset = InTheWildDataset(
-            cache_dir=cache_dir,
+            data_dir=cache_dir,
             target_len=data_cfg.get("target_samples", 64000),
         )
         asv_score_file = None  # No ASV scores for In-the-Wild
@@ -322,7 +336,7 @@ def evaluate_all_folds(
         model.eval()
 
         # Evaluate
-        eval_result = evaluate_model(model, dataloader, device, amp_dtype)
+        eval_result = evaluate_model(model, dataloader, device, amp_dtype, fold_idx=fold_idx, dataset_name=dataset_name)
         metrics = compute_metrics(
             eval_result["scores"],
             eval_result["labels"],
@@ -502,8 +516,30 @@ def run_full_evaluation(
         wandb_run.summary[f"{prefix}/latency_ms"] = benchmark["latency_ms_mean"]
         wandb_run.summary[f"{prefix}/rtf"] = benchmark["rtf"]
 
-    # ── 5. Summary Table ─────────────────────────────────────
+    # ── 5. Summary Table & Save to Disk ──────────────────────
     _print_summary_table(results)
+    
+    # Save to local JSON file
+    import json
+    experiment_name = config.get("experiment", {}).get("name", "experiment")
+    save_dir = Path(config.get("checkpoint", {}).get("save_dir", "experiments")) / experiment_name / model_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    json_path = save_dir / "evaluation_results.json"
+    
+    # helper to handle numpy types in json
+    def default_numpy(obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+    with open(json_path, "w") as f:
+        json.dump(results, f, indent=4, default=default_numpy)
+        
+    logger.info("Evaluation results saved locally to: %s", json_path)
 
     return results
 

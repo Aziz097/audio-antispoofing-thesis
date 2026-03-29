@@ -64,6 +64,7 @@ class ASVspoof2019Dataset(Dataset):
         rawboost_params: dict[str, Any] | None = None,
         rawboost_algo: int = 4,
         is_eval: bool = False,
+        pre_load: bool = False,
     ) -> None:
         self.samples = samples
         self.flac_dir = Path(flac_dir)
@@ -83,13 +84,16 @@ class ASVspoof2019Dataset(Dataset):
         )
 
         self._audio_cache: list[np.ndarray] = []
-        logger.info("Pre-loading %d audio files to RAM...", len(self.samples))
-        for s in self.samples:
-            fpath = self.flac_dir / f"{s['filename']}.flac"
-            wav, _ = sf.read(str(fpath))
-            self._audio_cache.append(wav.astype(np.float64))
-        logger.info("Audio pre-load complete. RAM usage approx %.1f MB",
-                    sum(a.nbytes for a in self._audio_cache) / 1e6)
+        if pre_load:
+            logger.info("Pre-loading %d audio files to RAM...", len(self.samples))
+            for s in tqdm(self.samples, desc="Pre-loading RAM", leave=False):
+                fpath = self.flac_dir / f"{s['filename']}.flac"
+                wav, _ = sf.read(str(fpath))
+                self._audio_cache.append(wav.astype(np.float32))
+            logger.info("Audio pre-load complete. RAM usage approx %.1f MB",
+                        sum(a.nbytes for a in self._audio_cache) / 1e6)
+        else:
+            logger.info("Audio RAM cache disabled, will read streaming off disk.")
 
     @staticmethod
     def parse_protocol(protocol_path: str | Path) -> list[dict[str, Any]]:
@@ -168,8 +172,12 @@ class ASVspoof2019Dataset(Dataset):
         filename = sample["filename"]
         label = sample["label"]
 
-        # Load audio
-        waveform = self._audio_cache[index].copy()
+        # Load audio (from cache if pre-loaded, else from disk directly)
+        if self._audio_cache:
+            waveform = self._audio_cache[index].copy()
+        else:
+            fpath = self.flac_dir / f"{filename}.flac"
+            waveform, _ = sf.read(str(fpath))
 
         # Crop or pad to target length
         waveform = self.crop_or_pad(waveform)
@@ -575,6 +583,10 @@ class _MultiDirASVspoofDataset(Dataset):
             sample = self.samples[idx]
             flac_path = self._resolve_flac_path(sample)
             waveform, _sr = sf.read(str(flac_path))
+            # Store as float32 to halve RAM usage (~10.5 GB vs ~21 GB for
+            # float64).  Conversion to float64 is done per-sample in
+            # __getitem__ (inside the worker subprocess) right before
+            # RawBoost so scipy.signal still gets full precision.
             self._audio_cache[idx] = waveform.astype(np.float32)
 
         # Estimate memory footprint
@@ -610,20 +622,28 @@ class _MultiDirASVspoofDataset(Dataset):
         filename = sample["filename"]
         label = sample["label"]
 
-        # 1. Fetch RAW audio (from RAM cache if available, else disk)
+        # 1. Fetch RAW audio — MUST .copy() to avoid mutating the shared
+        #    cache array when crop_or_pad returns a slice view of it.
+        #    Cast to float64 here (worker subprocess scope) so RawBoost's
+        #    scipy.signal internals get full precision without doubling the
+        #    shared-memory footprint (cache stays float32).
         if index in self._audio_cache:
-            waveform = self._audio_cache[index]
+            waveform = self._audio_cache[index].astype(np.float64)  # copy implicit in astype
         else:
             flac_path = self._resolve_flac_path(sample)
             waveform, _sr = sf.read(str(flac_path))
+            waveform = waveform.astype(np.float64)
 
-        # 2. Crop or pad
+        # 2. Crop or pad (operates in float64 for RawBoost compatibility)
         waveform = self.crop_or_pad(waveform)
 
-        # 3. ON-THE-FLY Augmentation (only bonafide in training splits)
-        # Fixes catastrophic overfitting issue by ensuring diverse 
-        # augmentations every epoch.
-        if self.augment and self.rawboost is not None and label == 1:
+        # 3. ON-THE-FLY Augmentation — applied to ALL training samples
+        # (bonafide AND spoof).  Restricting to bonafide-only means 90%
+        # of the data (spoof) is bit-identical every epoch, causing the
+        # model to trivially memorize spoof samples → train_loss → 0.03
+        # with val_eer → 30%+.  Augmenting all samples forces the model
+        # to learn a general boundary rather than memorizing clean spoof.
+        if self.augment and self.rawboost is not None:
             waveform = self.rawboost(waveform, algo=self.rawboost_algo)
 
         x = torch.from_numpy(waveform.astype(np.float32))
@@ -667,10 +687,17 @@ def get_dataloader(
         generator.manual_seed(seed)
 
     def seed_worker(worker_id: int) -> None:
-        """Set unique seed per worker for reproducibility."""
-        worker_seed = torch.initial_seed() % 2**32
-        np.random.seed(worker_seed)
+        """Set unique seed per worker to ensure diverse RawBoost noise.
+
+        Each worker gets a distinct seed derived from PyTorch's
+        initial_seed() which already incorporates the epoch number.
+        Imports are explicit here because workers run in a subprocess
+        with a separate namespace.
+        """
         import random
+        import numpy as np_worker
+        worker_seed = torch.initial_seed() % (2 ** 32)
+        np_worker.random.seed(worker_seed)
         random.seed(worker_seed)
 
     use_persistent = persistent_workers and num_workers > 0

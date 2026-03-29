@@ -51,7 +51,7 @@ kfold:
 train:
   max_epochs: 100
   batch_size: 48
-  grad_accumulation_steps: 2 
+  grad_accumulation_steps: 1
   optimizer:
     name: "adam"
     lr: 1.0e-4
@@ -59,8 +59,6 @@ train:
     betas: [0.9, 0.999]
   loss:
     name: "weighted_cross_entropy"
-    weight_bonafide: 0.5
-    weight_spoof: 0.5
   clip_grad_norm: 1.0
 
 # ── Early Stopping ────────────────────────────────────────

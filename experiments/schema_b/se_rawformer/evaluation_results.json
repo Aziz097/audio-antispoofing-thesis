@@ -1,0 +1,147 @@
+{
+    "model_name": "se_rawformer",
+    "asvspoof_eval": {
+        "model_name": "se_rawformer",
+        "dataset": "asvspoof_eval",
+        "fold_results": [
+            {
+                "fold": 0,
+                "eer": 1.7943150239338075,
+                "eer_threshold": 7.125,
+                "accuracy": 98.18493198759072,
+                "n_bonafide": 7355,
+                "n_spoof": 63882,
+                "min_tdcf": 0.05726130795405997
+            },
+            {
+                "fold": 1,
+                "eer": 1.9442326224734845,
+                "eer_threshold": 6.0625,
+                "accuracy": 98.04736302764013,
+                "n_bonafide": 7355,
+                "n_spoof": 63882,
+                "min_tdcf": 0.061869999812196035
+            },
+            {
+                "fold": 2,
+                "eer": 1.740511072728821,
+                "eer_threshold": 2.71875,
+                "accuracy": 98.25652399736093,
+                "n_bonafide": 7355,
+                "n_spoof": 63882,
+                "min_tdcf": 0.05559152240343861
+            },
+            {
+                "fold": 3,
+                "eer": 1.5798819122042465,
+                "eer_threshold": 4.09375,
+                "accuracy": 98.41093813608097,
+                "n_bonafide": 7355,
+                "n_spoof": 63882,
+                "min_tdcf": 0.05236134509411507
+            },
+            {
+                "fold": 4,
+                "eer": 1.8358420269731255,
+                "eer_threshold": 0.82421875,
+                "accuracy": 98.16247174923144,
+                "n_bonafide": 7355,
+                "n_spoof": 63882,
+                "min_tdcf": 0.04992707796264907
+            }
+        ],
+        "fold_eers": [
+            1.7943150239338075,
+            1.9442326224734845,
+            1.740511072728821,
+            1.5798819122042465,
+            1.8358420269731255
+        ],
+        "mean_eer": 1.778956531662697,
+        "std_eer": 0.11991395788682271,
+        "fused_metrics": {
+            "eer": 1.4822028786887858,
+            "eer_threshold": 3.6578125,
+            "accuracy": 98.5162205033901,
+            "n_bonafide": 7355,
+            "n_spoof": 63882,
+            "min_tdcf": 0.046015226632389564
+        }
+    },
+    "in_the_wild": {
+        "model_name": "se_rawformer",
+        "dataset": "in_the_wild",
+        "fold_results": [
+            {
+                "fold": 0,
+                "eer": 54.56127455460849,
+                "eer_threshold": -6.125,
+                "accuracy": 45.71572422039712,
+                "n_bonafide": 19963,
+                "n_spoof": 11816
+            },
+            {
+                "fold": 1,
+                "eer": 54.88487465351862,
+                "eer_threshold": -7.28125,
+                "accuracy": 45.22798074199944,
+                "n_bonafide": 19963,
+                "n_spoof": 11816
+            },
+            {
+                "fold": 2,
+                "eer": 54.25866072443905,
+                "eer_threshold": -7.4375,
+                "accuracy": 46.11850593159004,
+                "n_bonafide": 19963,
+                "n_spoof": 11816
+            },
+            {
+                "fold": 3,
+                "eer": 51.5655348226989,
+                "eer_threshold": -6.75,
+                "accuracy": 48.63589162654583,
+                "n_bonafide": 19963,
+                "n_spoof": 11816
+            },
+            {
+                "fold": 4,
+                "eer": 49.07665610797714,
+                "eer_threshold": -7.09375,
+                "accuracy": 51.1658642499764,
+                "n_bonafide": 19963,
+                "n_spoof": 11816
+            }
+        ],
+        "fold_eers": [
+            54.56127455460849,
+            54.88487465351862,
+            54.25866072443905,
+            51.5655348226989,
+            49.07665610797714
+        ],
+        "mean_eer": 52.86940017264844,
+        "std_eer": 2.2333648864004094,
+        "fused_metrics": {
+            "eer": 53.04492305348511,
+            "eer_threshold": -6.81875,
+            "accuracy": 47.01217785329935,
+            "n_bonafide": 19963,
+            "n_spoof": 11816
+        }
+    },
+    "model_stats": {
+        "trainable_params": 371541,
+        "params": 371541,
+        "macs": 5795300209
+    },
+    "inference_benchmark": {
+        "latency_ms_mean": 5.387285383185372,
+        "latency_ms_std": 0.026622110012212676,
+        "latency_ms_p95": 5.440078655374236,
+        "latency_ms_min": 5.343065015040338,
+        "latency_ms_max": 5.473521014209837,
+        "throughput_samples_per_sec": 185.622243648196,
+        "rtf": 0.001346821345796343
+    }
+}

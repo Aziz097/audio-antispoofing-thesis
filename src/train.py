@@ -226,11 +226,10 @@ def train_one_epoch(
 
         # Update progress bar every batch
         running_loss = total_loss / step_count
-        pbar.set_postfix(
-            loss=f"{running_loss:.4f}",
-            EER=eer_str,
-            ordered=True,
-        )
+        pbar.set_postfix({
+            "loss": f"{running_loss:.4f}",
+            "EER": eer_str,
+        })
 
         # Optimizer step every grad_accum_steps
         if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_loader):
@@ -348,7 +347,7 @@ def run_fold(
     config: dict[str, Any],
     device: torch.device,
     wandb_run: Any | None = None,
-    resume: str | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     """Train and validate a model for a single fold.
 
@@ -405,14 +404,50 @@ def run_fold(
         "Model '%s' created: %s trainable params", model_name, f"{n_params:,}",
     )
 
-    if resume is not None:
-        resume_path = Path(resume)
-        if resume_path.exists():
-            checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
-            model.load_state_dict(checkpoint)
-            logger.info("Resumed from checkpoint: %s", resume_path)
+    # Calculate path early to check for resume capability
+    experiment_name = config.get("experiment", {}).get("name", "experiment")
+    save_dir = Path(ckpt_cfg.get("save_dir", "experiments")) / experiment_name / model_name / f"fold_{fold_idx}" / "checkpoints"
+    latest_ckpt_path = save_dir / f"{model_name}_fold{fold_idx}_latest.pth"
+
+    # ── Resume: load full training state ────────────────────
+    start_epoch = 0
+    resumed_best_eer: float | None = None
+    
+    # Also support averaged topk check — if the fold is fully completed it will have this
+    avg_path = save_dir / f"{model_name}_fold{fold_idx}_averaged_top{ckpt_cfg.get('top_k', 5)}.pth"
+    fold_already_completed = False
+    
+    if resume:
+        if avg_path.exists():
+            logger.info("Fold %d is already fully completed (averaged checkpoint exists). Skipping fold.", fold_idx)
+            fold_already_completed = True
+            
+            # Load the averaged state to extract dummy metrics 
+            try:
+                avg_state = torch.load(avg_path, map_location="cpu", weights_only=True)
+                resumed_best_eer = avg_state.get("best_metric", 100.0) # default bad eer
+            except Exception:
+                pass
+                
+        elif latest_ckpt_path.exists():
+            logger.info("Smart Resume triggered for fold %d. Loading %s", fold_idx, latest_ckpt_path.name)
+            ckpt = torch.load(latest_ckpt_path, map_location=device, weights_only=False)
+            if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+                # Full training state checkpoint
+                model.load_state_dict(ckpt["model_state_dict"])
+                start_epoch = ckpt.get("epoch", 0) + 1
+                resumed_best_eer = ckpt.get("best_eer", None)
+                logger.info(
+                    "Resumed full state from checkpoint: %s (epoch=%d/%d, best_eer=%s)",
+                    latest_ckpt_path.name, start_epoch, train_cfg.get("max_epochs", 100),
+                    f"{resumed_best_eer:.4f}" if resumed_best_eer is not None else "N/A",
+                )
+            else:
+                # Legacy: plain model state_dict
+                model.load_state_dict(ckpt)
+                logger.warning("Resumed model weights from legacy state dict, epoch status lost.")
         else:
-            logger.warning("Checkpoint not found at %s. Starting from scratch.", resume_path)
+            logger.info("Resume requested, but no latest.pth found for fold %d. Starting from scratch.", fold_idx)
 
     # ── Loss Function ────────────────────────────────────────
     # Compute inverse-frequency weights dynamically from the training fold so
@@ -455,6 +490,17 @@ def run_fold(
     amp_dtype = torch.bfloat16 if amp_dtype_str == "bfloat16" else torch.float16
     scaler = GradScaler("cuda", enabled=vram_cfg.get("grad_scaler", True))
 
+    # Re-load optimizer + scaler state if resuming from a full checkpoint
+    if resume and not fold_already_completed and latest_ckpt_path.exists():
+        ckpt = torch.load(latest_ckpt_path, map_location=device, weights_only=False)
+        if isinstance(ckpt, dict):
+            if "optimizer_state_dict" in ckpt:
+                optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+                logger.info("Optimizer state restored from checkpoint.")
+            if "scaler_state_dict" in ckpt:
+                scaler.load_state_dict(ckpt["scaler_state_dict"])
+                logger.info("GradScaler state restored from checkpoint.")
+
     # ── Early Stopping ───────────────────────────────────────
     early_stopper = EarlyStopping(
         patience=es_cfg.get("patience", 10),
@@ -463,8 +509,6 @@ def run_fold(
     )
 
     # ── Checkpoint Manager ───────────────────────────────────
-    experiment_name = config.get("experiment", {}).get("name", "experiment")
-    save_dir = Path(ckpt_cfg.get("save_dir", "experiments")) / experiment_name / model_name / f"fold_{fold_idx}" / "checkpoints"
     ckpt_manager = CheckpointManager(
         save_dir=save_dir,
         top_k=ckpt_cfg.get("top_k", 5),
@@ -478,26 +522,36 @@ def run_fold(
     set_to_none = vram_cfg.get("set_to_none", True)
 
     logger.info(
-        "Starting fold %d: max_epochs=%d, batch_size=%d, grad_accum=%d, lr=%.1e",
+        "Starting fold %d: max_epochs=%d, batch_size=%d, grad_accum=%d, lr=%.1e%s",
         fold_idx, max_epochs, train_cfg.get("batch_size", 24),
         grad_accum_steps, opt_cfg.get("lr", 1e-4),
+        f" [RESUMED from epoch {start_epoch}]" if start_epoch > 0 else "",
     )
 
+    # ── Epoch Loop ───────────────────────────────────────────
     all_metrics: list[dict[str, float]] = []
+    
+    if fold_already_completed:
+        logger.info("Fold %d complete: best_eer=%.2f%% (from previous run)", fold_idx, resumed_best_eer if resumed_best_eer else 0.0)
+        return {
+            "best_eer": resumed_best_eer if resumed_best_eer is not None else 100.0,
+            "best_epoch": start_epoch,
+            "checkpoint_paths": [str(avg_path)],
+            "metrics": [],
+        }
 
-    # ── Smoke-test log ───────────────────────────────────────
+    # Fold metadata — log via summary (not a timestep)
     if wandb_run is not None:
-        wandb_run.log({
-            "fold": fold_idx,
-            "fold/n_train": len(train_dataset),
-            "fold/n_val": len(val_dataset),
-            "fold/batch_size": train_cfg.get("batch_size", 32),
-            "fold/num_workers": _n_workers,
+        wandb_run.summary.update({
+            f"fold{fold_idx}/n_train": len(train_dataset),
+            f"fold{fold_idx}/n_val": len(val_dataset),
+            f"fold{fold_idx}/batch_size": train_cfg.get("batch_size", 32),
+            f"fold{fold_idx}/num_workers": _n_workers,
         })
 
     # ── Epoch Loop ───────────────────────────────────────────
     last_eer: float | None = None         # Track for tqdm display
-    for epoch in range(max_epochs):
+    for epoch in range(start_epoch, max_epochs):
         torch.cuda.reset_peak_memory_stats()
         
         # Train
@@ -560,7 +614,7 @@ def run_fold(
             train_metrics["train/steps_per_sec"],
         )
 
-        # Checkpoint
+        # Checkpoint (top-K best by EER)
         ckpt_manager.save(
             state_dict=model.state_dict(),
             metric=val_metrics["val/eer"],
@@ -568,6 +622,18 @@ def run_fold(
             model_name=model_name,
             fold=fold_idx,
         )
+
+        # Save rolling full-state checkpoint for crash recovery / resume.
+        # Overwrites every epoch — always reflects the latest completed epoch.
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
+            "best_eer": early_stopper.best_value,
+            "val_eer": val_metrics["val/eer"],
+            "config": config,
+        }, str(latest_ckpt_path))
 
         # Early stopping
         if early_stopper.step(val_metrics["val/eer"]):
@@ -613,7 +679,7 @@ def run_kfold_experiment(
     config: dict[str, Any],
     device: torch.device,
     wandb_run: Any | None = None,
-    resume: str | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     """Run full K-Fold cross-validation experiment for one model.
 
